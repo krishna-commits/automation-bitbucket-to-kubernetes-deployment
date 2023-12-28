@@ -1,0 +1,104 @@
+image: atlassian/pipelines-awscli
+clone:
+  depth: full
+options:
+  size: 2x
+pipelines:
+  branches:
+    '*':
+      - step:
+          name: Deploy to ECR and Selection to Branch
+          services:
+            - docker
+          script:
+            - echo $BITBUCKET_BRANCH
+            - apk add --no-cache yq
+            - DOMAIN=$(yq eval ".branches[\"$BITBUCKET_BRANCH\"]" kubernetes/branch_domain_mapping.yml)
+            - echo $DOMAIN
+            - |
+              if [ "$BITBUCKET_BRANCH" != "production" ]; then
+                  export AWS_ACCOUNT_ID=$ACCOUNT_ID
+                  export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+                  export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+                  export AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION
+                  export K8S_CLUSTER=$K8S_CLUSTER
+                else
+                  export AWS_ACCOUNT_ID=$ACCOUNT_ID_PROD
+                  export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID_PROD
+                  export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY_PROD
+                  export AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION_PROD
+                  export K8S_CLUSTER=$K8S_CLUSTER_PROD
+                fi
+            - export APP=$(echo $BITBUCKET_REPO_FULL_NAME-$BITBUCKET_BRANCH | awk -F'/' '{print tolower($2)}')
+            - export BITBUCKET_COMMIT_SHORT=$(echo $BITBUCKET_COMMIT | cut -c1-7)
+            - export IMAGE_TAG=$BITBUCKET_COMMIT_SHORT 
+            - export DOCKER_REPO=$(echo "$APP" | tr '[:upper:]' '[:lower:]') 
+            - export IMAGE_URL=$(echo $ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$DOCKER_REPO:$IMAGE_TAG | awk -F'/' '{print tolower($2)}')
+            - pip install --upgrade awscli    
+            - |
+              repository_exists=$(aws ecr describe-repositories --repository-names $APP --region $AWS_DEFAULT_REGION --output json | jq -r '.repositories | length')
+
+              if [ -z "$repository_exists" ]; then
+                # ECR repository does not exist, create it
+                echo "Creating ECR repository: $APP"
+                aws ecr create-repository --repository-name $APP --region $AWS_DEFAULT_REGION --image-tag-mutability IMMUTABLE
+              fi
+            - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+            - IMAGE_URL=$ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$DOCKER_REPO:$IMAGE_TAG
+            - docker build -t "$IMAGE_URL" .
+            - docker tag "$IMAGE_URL" "$IMAGE_URL"
+            - docker push "$IMAGE_URL"
+          variables:
+            IMAGE_URL: $ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$DOCKER_REPO:$IMAGE_TAG
+            DOMAIN: $DOMAIN
+      - step:
+          name: Deploy to Kubernetes
+          script:
+            - wget -O kubectl "https://dl.k8s.io/release/$(wget -qO- https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            - chmod +x kubectl  
+            - mv kubectl /usr/local/bin/ 
+            - kubectl version --client  
+            - apk add --no-cache yq
+            - DOMAIN=$(yq eval ".branches[\"$BITBUCKET_BRANCH\"]" kubernetes/branch_domain_mapping.yml)
+            - export ACCOUNT_ID=$ACCOUNT_ID
+            - export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+            - export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+            - export AWS_DEFAULT_REGION=$AWS_DEFAULT_REGION
+            - export K8S_CLUSTER=$K8S_CLUSTER
+            - export BITBUCKET_COMMIT_SHORT=$(echo $BITBUCKET_COMMIT | cut -c1-7)
+            - export IMAGE_TAG=$BITBUCKET_COMMIT_SHORT 
+            - echo $IMAGE_TAG
+            - export DOMAIN=$DOMAIN
+            - aws configure set aws_access_key_id "${AWS_ACCESS_KEY_ID}"
+            - aws configure set aws_secret_access_key "${AWS_SECRET_ACCESS_KEY}"
+            - aws eks --region $AWS_DEFAULT_REGION update-kubeconfig --name $K8S_CLUSTER
+            - export APP=$(echo $BITBUCKET_REPO_FULL_NAME-$BITBUCKET_BRANCH | awk -F'/' '{print tolower($2)}')
+            - export DOCKER_REPO=$(echo "$APP" | tr '[:upper:]' '[:lower:]') 
+            - |
+              namespace_exists=$(kubectl get namespace "$APP" --ignore-not-found=true -o jsonpath='{.metadata.name}')
+
+              if [ -z "$namespace_exists" ]; then
+                # Namespace does not exist, create it
+                echo "Creating Kubernetes namespace: $APP"
+                kubectl create namespace "$APP"
+              fi
+
+            - export IMAGE_URL="$ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$DOCKER_REPO:$IMAGE_TAG"
+            - sed -i 's/{{APP}}/'"$APP"'/g' kubernetes/deployment.yaml
+            - sed -i 's~{{IMAGE_URL}}~'"$IMAGE_URL"'~' kubernetes/deployment.yaml
+            - sed -i 's/{{DOMAIN}}/'"$DOMAIN"'/g' kubernetes/deployment.yaml
+            - cat kubernetes/deployment.yaml 
+            - |
+              if ! kubectl get deployment "${APP}-deployment" --namespace="${APP}" &> /dev/null; then
+                echo "Deploying initial Kubernetes resources..."
+                kubectl apply -f kubernetes/deployment.yaml --namespace="${APP}"
+              else
+                echo "Restarting deployment..."
+                kubectl apply -f kubernetes/deployment.yaml --namespace="${APP}"
+                kubectl rollout restart deployment "${APP}-deployment" --namespace="${APP}"
+              fi
+            - echo $DOMAIN
+definitions:
+  services:
+    docker:
+      memory: 7168 

@@ -1,0 +1,10 @@
+branches:
+  master: neupanekrishna.com.np
+  dev: neupanekrishna.com.np
+  staging: neupanekrishna.com.np
+  production: neupanekrishna.com.np
+  feature_branch_1: custom1
+  feature_branch_2: custom2
+  # ... add mappings for all branches
+
+  
