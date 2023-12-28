@@ -3,6 +3,8 @@
 ## To know step by step go through the link URL
 ## https://medium.com/@neupane.krishna33/automatic-bitbucket-pipeline-to-kubernetes-1ffbc96b1cad
 
+##  https://project.neupanekrishna.com.np/automatic-bitbucket-pipeline-to-kubernetes
+
 
 
 
