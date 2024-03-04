@@ -57,6 +57,7 @@ metadata:
     app: {{APP}}
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
+    acme.cert-manager.io/http01-edit-in-place: "true"
     kubernetes.io/ingress.class: nginx
 spec:
   tls:
