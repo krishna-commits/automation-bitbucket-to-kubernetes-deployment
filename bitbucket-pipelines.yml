@@ -94,7 +94,6 @@ pipelines:
                 kubectl apply -f kubernetes/deployment.yaml --namespace="${APP}"
               else
                 echo "Restarting deployment..."
-                kubectl apply -f kubernetes/deployment.yaml --namespace="${APP}"
                 kubectl rollout restart deployment "${APP}-deployment" --namespace="${APP}"
               fi
             - echo $DOMAIN
